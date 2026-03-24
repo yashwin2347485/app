@@ -8,11 +8,37 @@ import socketio
 import random
 import string
 import uvicorn
+import json
+import os
 
-# In-memory storage (no database needed!)
-users_db = {}
-locations_db = []
-geofences_db = []
+# Data file paths
+DATA_DIR = "data"
+USERS_FILE = os.path.join(DATA_DIR, "users.json")
+LOCATIONS_FILE = os.path.join(DATA_DIR, "locations.json")
+GEOFENCES_FILE = os.path.join(DATA_DIR, "geofences.json")
+
+# Create data directory if it doesn't exist
+os.makedirs(DATA_DIR, exist_ok=True)
+
+# Load data from files or create empty storage
+def load_data(file_path):
+    if os.path.exists(file_path):
+        with open(file_path, 'r') as f:
+            return json.load(f)
+    return {}
+
+def save_data(file_path, data):
+    with open(file_path, 'w') as f:
+        json.dump(data, f, indent=2)
+
+# Load existing data
+users_db = load_data(USERS_FILE)
+locations_data = load_data(LOCATIONS_FILE)
+locations_db = locations_data.get('locations', [])
+geofences_data = load_data(GEOFENCES_FILE)
+geofences_db = geofences_data.get('geofences', [])
+
+print(f"📂 Loaded {len(users_db)} users, {len(locations_db)} locations")
 
 # Create Socket.IO server
 sio = socketio.AsyncServer(
@@ -88,6 +114,7 @@ async def create_user(input: UserCreate):
         'isLost': False
     }
     users_db[user['id']] = user
+    save_data(USERS_FILE, users_db)  # Save to file
     return user
 
 @app.get("/api/users/{user_id}")
@@ -122,6 +149,7 @@ async def accept_invitation(input: InvitationAccept):
             current_user['sharedWith'].append(target_user['id'])
         if input.userId not in target_user['sharedWith']:
             target_user['sharedWith'].append(input.userId)
+        save_data(USERS_FILE, users_db)  # Save to file
     
     return {"message": "Invitation accepted", "user": target_user}
 
@@ -157,6 +185,9 @@ async def create_location(input: LocationUpdate):
     if len(locations_db) > 1000:
         locations_db.pop(0)
     
+    # Save to file
+    save_data(LOCATIONS_FILE, {'locations': locations_db})
+    
     # Emit real-time update
     await sio.emit('location_update', location, room=input.userId)
     
@@ -191,6 +222,7 @@ async def create_geofence(input: GeofenceCreate):
         'isActive': True
     }
     geofences_db.append(geofence)
+    save_data(GEOFENCES_FILE, {'geofences': geofences_db})
     return geofence
 
 @app.get("/api/geofences/{user_id}")
