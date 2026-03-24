@@ -1,0 +1,22 @@
+import React from 'react';
+import { StyleSheet } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useLocation } from '../../contexts/LocationContext';
+import MapComponent from '../../components/MapComponent';
+
+export default function MapScreen() {
+  const { myLocation, sharedLocations } = useLocation();
+
+  return (
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <MapComponent myLocation={myLocation} sharedLocations={sharedLocations} />
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+});
