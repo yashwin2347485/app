@@ -1,5 +1,16 @@
 // API Configuration
-const API_URL = window.location.origin + '/api';
+// Get the base URL without the port
+const getAPIUrl = () => {
+    // If we're on preview URL, use the base domain
+    if (window.location.hostname.includes('preview.emergentagent.com')) {
+        const baseUrl = window.location.protocol + '//' + window.location.hostname.replace(/vscode-[^.]+/, 'find-my-app-217');
+        return baseUrl + '/api';
+    }
+    // For localhost, use port 8001
+    return window.location.protocol + '//' + window.location.hostname + ':8001/api';
+};
+
+const API_URL = getAPIUrl();
 let socket = null;
 let map = null;
 let markers = {};
@@ -8,6 +19,7 @@ let updateInterval = null;
 
 // Initialize the app
 document.addEventListener('DOMContentLoaded', () => {
+    console.log('App loaded, API URL:', API_URL);
     checkExistingUser();
 });
 
@@ -98,7 +110,12 @@ function initializeMap() {
 
 // Connect to Socket.IO
 function connectSocket() {
-    socket = io(API_URL.replace('/api', ''));
+    // Get the socket URL (same as API URL but without /api)
+    const socketUrl = API_URL.replace('/api', '');
+    socket = io(socketUrl, {
+        transports: ['polling', 'websocket'],
+        path: '/socket.io/'
+    });
 
     socket.on('connect', () => {
         console.log('Socket connected');

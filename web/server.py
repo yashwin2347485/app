@@ -8,7 +8,7 @@ import http.server
 import socketserver
 import os
 
-PORT = 5000
+PORT = 5001
 DIRECTORY = "/app/web"
 
 class MyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
