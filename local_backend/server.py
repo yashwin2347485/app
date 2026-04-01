@@ -13,12 +13,13 @@ import os
 
 # MongoDB connection
 MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
-DB_NAME = os.environ.get('DB_NAME', 'location_tracker')
+DB_NAME = os.environ.get('DB_NAME', 'findmy_location_app')  # Changed to unique name
 
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
 
 print(f"📂 Connected to MongoDB: {DB_NAME}")
+print(f"📍 MongoDB URL: {MONGO_URL}")
 
 # Create Socket.IO server
 sio = socketio.AsyncServer(
@@ -66,24 +67,34 @@ class NotificationCreate(BaseModel):
 
 @app.post("/api/users")
 async def create_user(input: UserCreate):
-    # Check if user already exists
-    existing_user = await db.users.find_one({"deviceId": input.deviceId})
-    if existing_user:
-        existing_user['_id'] = str(existing_user['_id'])
-        return existing_user
-    
-    user = {
-        'id': str(uuid.uuid4()),
-        'name': input.name,
-        'deviceId': input.deviceId,
-        'inviteCode': ''.join(random.choices(string.ascii_uppercase + string.digits, k=6)),
-        'sharedWith': [],
-        'createdAt': datetime.utcnow().isoformat(),
-        'isLost': False
-    }
-    
-    await db.users.insert_one(user)
-    return user
+    try:
+        print(f"Creating user: {input.name}, deviceId: {input.deviceId}")
+        
+        # Check if user already exists
+        existing_user = await db.users.find_one({"deviceId": input.deviceId})
+        if existing_user:
+            print(f"User already exists: {existing_user['name']}")
+            existing_user['_id'] = str(existing_user['_id'])
+            return existing_user
+        
+        user = {
+            'id': str(uuid.uuid4()),
+            'name': input.name,
+            'deviceId': input.deviceId,
+            'inviteCode': ''.join(random.choices(string.ascii_uppercase + string.digits, k=6)),
+            'sharedWith': [],
+            'createdAt': datetime.utcnow().isoformat(),
+            'isLost': False
+        }
+        
+        await db.users.insert_one(user)
+        print(f"✅ User created successfully: {user['name']} (ID: {user['id']})")
+        return user
+    except Exception as e:
+        print(f"❌ Error creating user: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error creating user: {str(e)}")
 
 @app.get("/api/users/{user_id}")
 async def get_user(user_id: str):
@@ -166,45 +177,63 @@ async def set_lost_device(userId: str, isLost: bool):
 
 @app.post("/api/locations")
 async def create_location(input: LocationUpdate):
-    location = {
-        'id': str(uuid.uuid4()),
-        'userId': input.userId,
-        'lat': input.lat,
-        'lng': input.lng,
-        'timestamp': datetime.utcnow().isoformat(),
-        'accuracy': input.accuracy,
-        'battery': input.battery
-    }
-    
-    await db.locations.insert_one(location)
-    
-    # Get user info for notification
-    user = await db.users.find_one({"id": input.userId})
-    
-    # Emit real-time update to user's room
-    await sio.emit('location_update', location, room=input.userId)
-    
-    # Send notification to all friends
-    if user:
-        for friend_id in user.get('sharedWith', []):
-            notification = {
-                'id': str(uuid.uuid4()),
-                'userId': friend_id,
-                'fromUser': user['name'],
-                'fromUserId': input.userId,
-                'message': f"{user['name']} moved to a new location",
-                'type': 'location_change',
-                'lat': input.lat,
-                'lng': input.lng,
-                'timestamp': datetime.utcnow().isoformat(),
-                'read': False
-            }
-            await db.notifications.insert_one(notification)
+    try:
+        print(f"📍 Creating location for user {input.userId}: ({input.lat}, {input.lng})")
+        
+        location = {
+            'id': str(uuid.uuid4()),
+            'userId': input.userId,
+            'lat': input.lat,
+            'lng': input.lng,
+            'timestamp': datetime.utcnow().isoformat(),
+            'accuracy': input.accuracy,
+            'battery': input.battery
+        }
+        
+        result = await db.locations.insert_one(location)
+        print(f"✅ Location saved to database with ID: {result.inserted_id}")
+        
+        # Get user info for notification
+        user = await db.users.find_one({"id": input.userId})
+        if not user:
+            print(f"⚠️  User not found: {input.userId}")
+        else:
+            print(f"Found user: {user['name']}")
+        
+        # Emit real-time update to user's room
+        await sio.emit('location_update', location, room=input.userId)
+        print(f"📡 Emitted location update to room: {input.userId}")
+        
+        # Send notification to all friends
+        if user:
+            shared_with = user.get('sharedWith', [])
+            print(f"Sending notifications to {len(shared_with)} friends")
             
-            # Emit notification via socket
-            await sio.emit('notification', notification, room=friend_id)
-    
-    return location
+            for friend_id in shared_with:
+                notification = {
+                    'id': str(uuid.uuid4()),
+                    'userId': friend_id,
+                    'fromUser': user['name'],
+                    'fromUserId': input.userId,
+                    'message': f"{user['name']} moved to a new location",
+                    'type': 'location_change',
+                    'lat': input.lat,
+                    'lng': input.lng,
+                    'timestamp': datetime.utcnow().isoformat(),
+                    'read': False
+                }
+                await db.notifications.insert_one(notification)
+                
+                # Emit notification via socket
+                await sio.emit('notification', notification, room=friend_id)
+                print(f"🔔 Notification sent to friend: {friend_id}")
+        
+        return location
+    except Exception as e:
+        print(f"❌ Error creating location: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error creating location: {str(e)}")
 
 @app.get("/api/locations/{user_id}/latest")
 async def get_latest_location(user_id: str):
