@@ -8,37 +8,18 @@ import socketio
 import random
 import string
 import uvicorn
-import json
+from motor.motor_asyncio import AsyncIOMotorClient
 import os
+from math import radians, sin, cos, sqrt, atan2
 
-# Data file paths
-DATA_DIR = "data"
-USERS_FILE = os.path.join(DATA_DIR, "users.json")
-LOCATIONS_FILE = os.path.join(DATA_DIR, "locations.json")
-GEOFENCES_FILE = os.path.join(DATA_DIR, "geofences.json")
+# MongoDB connection
+MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
+DB_NAME = os.environ.get('DB_NAME', 'location_tracker')
 
-# Create data directory if it doesn't exist
-os.makedirs(DATA_DIR, exist_ok=True)
+client = AsyncIOMotorClient(MONGO_URL)
+db = client[DB_NAME]
 
-# Load data from files or create empty storage
-def load_data(file_path):
-    if os.path.exists(file_path):
-        with open(file_path, 'r') as f:
-            return json.load(f)
-    return {}
-
-def save_data(file_path, data):
-    with open(file_path, 'w') as f:
-        json.dump(data, f, indent=2)
-
-# Load existing data
-users_db = load_data(USERS_FILE)
-locations_data = load_data(LOCATIONS_FILE)
-locations_db = locations_data.get('locations', [])
-geofences_data = load_data(GEOFENCES_FILE)
-geofences_db = geofences_data.get('geofences', [])
-
-print(f"📂 Loaded {len(users_db)} users, {len(locations_db)} locations")
+print(f"📂 Connected to MongoDB: {DB_NAME}")
 
 # Create Socket.IO server
 sio = socketio.AsyncServer(
