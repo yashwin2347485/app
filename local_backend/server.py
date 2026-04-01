@@ -10,7 +10,6 @@ import string
 import uvicorn
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
-from math import radians, sin, cos, sqrt, atan2
 
 # MongoDB connection
 MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
@@ -39,28 +38,10 @@ class UserCreate(BaseModel):
     name: str
     deviceId: str
 
-class User(BaseModel):
-    id: str
-    name: str
-    deviceId: str
-    inviteCode: str
-    sharedWith: List[str] = []
-    createdAt: str
-    isLost: bool = False
-
 class LocationUpdate(BaseModel):
     userId: str
     lat: float
     lng: float
-    accuracy: Optional[float] = None
-    battery: Optional[int] = None
-
-class Location(BaseModel):
-    id: str
-    userId: str
-    lat: float
-    lng: float
-    timestamp: str
     accuracy: Optional[float] = None
     battery: Optional[int] = None
 
@@ -76,14 +57,20 @@ class GeofenceCreate(BaseModel):
     radius: float
     alertType: str
 
+class NotificationCreate(BaseModel):
+    userId: str
+    message: str
+    type: str  # 'location_change', 'geofence', 'alert'
+
 # ============= User Routes =============
 
 @app.post("/api/users")
 async def create_user(input: UserCreate):
     # Check if user already exists
-    for user in users_db.values():
-        if user['deviceId'] == input.deviceId:
-            return user
+    existing_user = await db.users.find_one({"deviceId": input.deviceId})
+    if existing_user:
+        existing_user['_id'] = str(existing_user['_id'])
+        return existing_user
     
     user = {
         'id': str(uuid.uuid4()),
@@ -94,58 +81,86 @@ async def create_user(input: UserCreate):
         'createdAt': datetime.utcnow().isoformat(),
         'isLost': False
     }
-    users_db[user['id']] = user
-    save_data(USERS_FILE, users_db)  # Save to file
+    
+    await db.users.insert_one(user)
     return user
 
 @app.get("/api/users/{user_id}")
 async def get_user(user_id: str):
-    if user_id not in users_db:
+    user = await db.users.find_one({"id": user_id})
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return users_db[user_id]
+    user['_id'] = str(user['_id'])
+    return user
 
 @app.get("/api/users/device/{device_id}")
 async def get_user_by_device(device_id: str):
-    for user in users_db.values():
-        if user['deviceId'] == device_id:
-            return user
-    raise HTTPException(status_code=404, detail="User not found")
+    user = await db.users.find_one({"deviceId": device_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user['_id'] = str(user['_id'])
+    return user
 
 @app.post("/api/users/accept-invitation")
 async def accept_invitation(input: InvitationAccept):
     # Find user with invite code
-    target_user = None
-    for user in users_db.values():
-        if user['inviteCode'] == input.inviteCode:
-            target_user = user
-            break
-    
+    target_user = await db.users.find_one({"inviteCode": input.inviteCode})
     if not target_user:
         raise HTTPException(status_code=404, detail="Invalid invite code")
     
     # Add to sharedWith lists (bidirectional)
-    if input.userId in users_db:
-        current_user = users_db[input.userId]
-        if target_user['id'] not in current_user['sharedWith']:
-            current_user['sharedWith'].append(target_user['id'])
-        if input.userId not in target_user['sharedWith']:
-            target_user['sharedWith'].append(input.userId)
-        save_data(USERS_FILE, users_db)  # Save to file
+    current_user = await db.users.find_one({"id": input.userId})
+    if not current_user:
+        raise HTTPException(status_code=404, detail="User not found")
     
+    # Update current user's sharedWith
+    if target_user['id'] not in current_user.get('sharedWith', []):
+        await db.users.update_one(
+            {"id": input.userId},
+            {"$addToSet": {"sharedWith": target_user['id']}}
+        )
+    
+    # Update target user's sharedWith (bidirectional)
+    if input.userId not in target_user.get('sharedWith', []):
+        await db.users.update_one(
+            {"id": target_user['id']},
+            {"$addToSet": {"sharedWith": input.userId}}
+        )
+    
+    target_user['_id'] = str(target_user['_id'])
     return {"message": "Invitation accepted", "user": target_user}
 
 @app.get("/api/users/{user_id}/shared")
 async def get_shared_users(user_id: str):
-    if user_id not in users_db:
+    user = await db.users.find_one({"id": user_id})
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    user = users_db[user_id]
     shared_users = []
-    for shared_id in user['sharedWith']:
-        if shared_id in users_db:
-            shared_users.append(users_db[shared_id])
+    for shared_id in user.get('sharedWith', []):
+        shared_user = await db.users.find_one({"id": shared_id})
+        if shared_user:
+            shared_user['_id'] = str(shared_user['_id'])
+            shared_users.append(shared_user)
     
     return shared_users
+
+@app.post("/api/users/lost-device")
+async def set_lost_device(userId: str, isLost: bool):
+    result = await db.users.update_one(
+        {"id": userId},
+        {"$set": {"isLost": isLost}}
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Emit socket event
+    await sio.emit('device_lost_status', {
+        'userId': userId,
+        'isLost': isLost
+    }, room=userId)
+    
+    return {"message": "Lost device status updated"}
 
 # ============= Location Routes =============
 
@@ -160,32 +175,93 @@ async def create_location(input: LocationUpdate):
         'accuracy': input.accuracy,
         'battery': input.battery
     }
-    locations_db.append(location)
     
-    # Keep only last 1000 locations
-    if len(locations_db) > 1000:
-        locations_db.pop(0)
+    await db.locations.insert_one(location)
     
-    # Save to file
-    save_data(LOCATIONS_FILE, {'locations': locations_db})
+    # Get user info for notification
+    user = await db.users.find_one({"id": input.userId})
     
-    # Emit real-time update
+    # Emit real-time update to user's room
     await sio.emit('location_update', location, room=input.userId)
+    
+    # Send notification to all friends
+    if user:
+        for friend_id in user.get('sharedWith', []):
+            notification = {
+                'id': str(uuid.uuid4()),
+                'userId': friend_id,
+                'fromUser': user['name'],
+                'fromUserId': input.userId,
+                'message': f"{user['name']} moved to a new location",
+                'type': 'location_change',
+                'lat': input.lat,
+                'lng': input.lng,
+                'timestamp': datetime.utcnow().isoformat(),
+                'read': False
+            }
+            await db.notifications.insert_one(notification)
+            
+            # Emit notification via socket
+            await sio.emit('notification', notification, room=friend_id)
     
     return location
 
 @app.get("/api/locations/{user_id}/latest")
 async def get_latest_location(user_id: str):
-    user_locations = [loc for loc in locations_db if loc['userId'] == user_id]
-    if not user_locations:
+    location = await db.locations.find_one(
+        {"userId": user_id},
+        sort=[("timestamp", -1)]
+    )
+    if not location:
         return None
-    return user_locations[-1]
+    location['_id'] = str(location['_id'])
+    return location
 
 @app.get("/api/locations/{user_id}/history")
 async def get_location_history(user_id: str, date: Optional[str] = None):
-    user_locations = [loc for loc in locations_db if loc['userId'] == user_id]
-    # Return last 100 locations
-    return user_locations[-100:]
+    query = {"userId": user_id}
+    
+    if date:
+        target_date = datetime.fromisoformat(date.replace('Z', '+00:00'))
+        start_of_day = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_of_day = start_of_day + timedelta(days=1)
+        query["timestamp"] = {"$gte": start_of_day.isoformat(), "$lt": end_of_day.isoformat()}
+    else:
+        # Get last 24 hours
+        query["timestamp"] = {"$gte": (datetime.utcnow() - timedelta(days=1)).isoformat()}
+    
+    locations = await db.locations.find(query).sort("timestamp", -1).limit(100).to_list(100)
+    for loc in locations:
+        loc['_id'] = str(loc['_id'])
+    return locations
+
+# ============= Notification Routes =============
+
+@app.get("/api/notifications/{user_id}")
+async def get_notifications(user_id: str, unread_only: bool = False):
+    query = {"userId": user_id}
+    if unread_only:
+        query["read"] = False
+    
+    notifications = await db.notifications.find(query).sort("timestamp", -1).limit(50).to_list(50)
+    for notif in notifications:
+        notif['_id'] = str(notif['_id'])
+    return notifications
+
+@app.post("/api/notifications/{notification_id}/mark-read")
+async def mark_notification_read(notification_id: str):
+    result = await db.notifications.update_one(
+        {"id": notification_id},
+        {"$set": {"read": True}}
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"message": "Notification marked as read"}
+
+@app.delete("/api/notifications/{user_id}/clear")
+async def clear_notifications(user_id: str):
+    await db.notifications.delete_many({"userId": user_id})
+    return {"message": "Notifications cleared"}
 
 # ============= Geofence Routes =============
 
@@ -202,13 +278,25 @@ async def create_geofence(input: GeofenceCreate):
         'createdAt': datetime.utcnow().isoformat(),
         'isActive': True
     }
-    geofences_db.append(geofence)
-    save_data(GEOFENCES_FILE, {'geofences': geofences_db})
+    await db.geofences.insert_one(geofence)
     return geofence
 
 @app.get("/api/geofences/{user_id}")
 async def get_geofences(user_id: str):
-    return [g for g in geofences_db if g['userId'] == user_id and g['isActive']]
+    geofences = await db.geofences.find({"userId": user_id, "isActive": True}).to_list(100)
+    for geo in geofences:
+        geo['_id'] = str(geo['_id'])
+    return geofences
+
+@app.delete("/api/geofences/{geofence_id}")
+async def delete_geofence(geofence_id: str):
+    result = await db.geofences.update_one(
+        {"id": geofence_id},
+        {"$set": {"isActive": False}}
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Geofence not found")
+    return {"message": "Geofence deleted"}
 
 # ============= Socket.IO Events =============
 
@@ -227,6 +315,13 @@ async def join_room(sid, data):
         sio.enter_room(sid, user_id)
         print(f"Client {sid} joined room {user_id}")
 
+@sio.event
+async def leave_room(sid, data):
+    user_id = data.get('userId')
+    if user_id:
+        sio.leave_room(sid, user_id)
+        print(f"Client {sid} left room {user_id}")
+
 # ============= CORS =============
 
 app.add_middleware(
@@ -237,24 +332,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ============= Startup Event =============
+
+@app.on_event("startup")
+async def startup_event():
+    # Create indexes for better performance
+    await db.users.create_index("id", unique=True)
+    await db.users.create_index("deviceId", unique=True)
+    await db.users.create_index("inviteCode", unique=True)
+    await db.locations.create_index([("userId", 1), ("timestamp", -1)])
+    await db.notifications.create_index([("userId", 1), ("timestamp", -1)])
+    print("✅ Database indexes created")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    client.close()
+
 # ============= Main =============
 
 if __name__ == "__main__":
     print("""
 ╔══════════════════════════════════════════════════════════╗
 ║                                                          ║
-║   🗺️  Find My - Backend Server                         ║
+║   🗺️  Find My - Backend Server with MongoDB            ║
 ║                                                          ║
 ║   Server starting on:                                    ║
 ║   👉 http://localhost:8001/api                          ║
 ║                                                          ║
 ║   Features:                                              ║
-║   ✅ Real-time location tracking                        ║
-║   ✅ User management                                     ║
-║   ✅ Location sharing                                    ║
+║   ✅ MongoDB Real-time Database                         ║
+║   ✅ Location tracking & history                        ║
+║   ✅ User management & sharing                          ║
+║   ✅ Real-time notifications                            ║
 ║   ✅ WebSocket support                                   ║
-║                                                          ║
-║   Database: In-memory (no MongoDB needed!)              ║
 ║                                                          ║
 ║   Press Ctrl+C to stop the server                       ║
 ║                                                          ║
