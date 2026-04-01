@@ -240,9 +240,162 @@
             font-size: 13px;
             line-height: 1.5;
         }
+
+        /* Notification Styles */
+        .notification-bell {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: white;
+            width: 50px;
+            height: 50px;
+            border-radius: 25px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 1000;
+            transition: all 0.3s;
+        }
+
+        .notification-bell:hover {
+            transform: scale(1.1);
+        }
+
+        .notification-badge {
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            background: #FF3B30;
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        .notification-panel {
+            position: fixed;
+            top: 80px;
+            right: 20px;
+            width: 400px;
+            max-height: 500px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+            display: none;
+            flex-direction: column;
+            z-index: 999;
+        }
+
+        .notification-panel.show {
+            display: flex;
+        }
+
+        .notification-header {
+            padding: 16px;
+            border-bottom: 1px solid #E5E5EA;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .notification-header h3 {
+            margin: 0;
+            font-size: 18px;
+            color: #000;
+        }
+
+        .clear-notifications {
+            background: none;
+            border: none;
+            color: #007AFF;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .notification-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
+        }
+
+        .notification-item {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            background: #F5F5F5;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .notification-item:hover {
+            background: #E5E5EA;
+        }
+
+        .notification-item.unread {
+            background: #E3F2FD;
+            border-left: 4px solid #007AFF;
+        }
+
+        .notification-title {
+            font-weight: 600;
+            color: #000;
+            margin-bottom: 4px;
+        }
+
+        .notification-message {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 4px;
+        }
+
+        .notification-time {
+            font-size: 12px;
+            color: #999;
+        }
+
+        .no-notifications {
+            padding: 40px;
+            text-align: center;
+            color: #999;
+        }
+
+        .notification-sound {
+            display: none;
+        }
     </style>
 </head>
 <body>
+    <!-- Notification Bell -->
+    <div class="notification-bell" onclick="toggleNotifications()" id="notificationBell">
+        <svg width="24" height="24" fill="#007AFF" viewBox="0 0 24 24">
+            <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2zm-2 1H8v-6c0-2.48 1.51-4.5 4-4.5s4 2.02 4 4.5v6z"/>
+        </svg>
+        <div class="notification-badge" id="notificationBadge" style="display: none;">0</div>
+    </div>
+
+    <!-- Notification Panel -->
+    <div class="notification-panel" id="notificationPanel">
+        <div class="notification-header">
+            <h3>Notifications</h3>
+            <button class="clear-notifications" onclick="clearAllNotifications()">Clear All</button>
+        </div>
+        <div class="notification-list" id="notificationList">
+            <div class="no-notifications">No notifications yet</div>
+        </div>
+    </div>
+
+    <!-- Notification Sound -->
+    <audio id="notificationSound" class="notification-sound" preload="auto">
+        <source src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBTGH0fPTgjMGHm7A7+OZSA0PVqzn77BdGAg+ltryxnMpBSh+zPLaizsIGGS56+mjUBELTKXh8bllHAU2jdXzzn4sBC1+zPDajzsIGGS56+mjUBELTKXh8bllHAU2jdXzzn4sBC1+zPDajzsIGGS56+mjUBELTKXh8bllHAU2jdXzzn4sBC1+zPDajzsIGGS56+mjUBELTKXh8bllHAU2jdXzzn4sBC1+zPDajzsIGGS56+mjUBELTKXh8bllHAU2jdXzzn4sBC1+zPDajzsIGGS56+mjUBELTKXh8bllHAU2jdXzzn4sBC1+zPDajzsIGGS56+mjUBELTKXh8bllHAU2jdXzzn4sBC1+zPDajzsIGGS56+mjUBELTKXh8bllHAU2jdXzzn4s" type="audio/wav">
+    </audio>
     <div class="container">
         <div class="header">
             <h1>🗺️ Find My - Location Tracker</h1>

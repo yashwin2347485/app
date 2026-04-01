@@ -5,11 +5,14 @@ let map = null;
 let markers = {};
 let currentUser = null;
 let updateInterval = null;
+let notifications = [];
+let unreadCount = 0;
 
 // Initialize the app
 document.addEventListener('DOMContentLoaded', () => {
     console.log('App loaded, API URL:', API_URL);
     checkExistingUser();
+    requestNotificationPermission();
 });
 
 // Check if user already exists
@@ -373,5 +376,221 @@ function startLocationUpdates() {
 
     updateInterval = setInterval(() => {
         loadSharedDevices();
+
+
+// ============= Notification Functions =============
+
+// Request notification permission
+function requestNotificationPermission() {
+    if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+    }
+}
+
+// Load notifications
+async function loadNotifications() {
+    if (!currentUser) return;
+    
+    try {
+        const response = await fetch(`${API_URL}/notifications/${currentUser.id}`);
+        if (response.ok) {
+            notifications = await response.json();
+            updateNotificationUI();
+        }
+    } catch (error) {
+        console.error('Error loading notifications:', error);
+    }
+}
+
+// Update notification UI
+function updateNotificationUI() {
+    unreadCount = notifications.filter(n => !n.read).length;
+    
+    const badge = document.getElementById('notificationBadge');
+    if (unreadCount > 0) {
+        badge.textContent = unreadCount > 99 ? '99+' : unreadCount;
+        badge.style.display = 'flex';
+    } else {
+        badge.style.display = 'none';
+    }
+    
+    renderNotifications();
+}
+
+// Render notifications
+function renderNotifications() {
+    const list = document.getElementById('notificationList');
+    
+    if (notifications.length === 0) {
+        list.innerHTML = '<div class="no-notifications">No notifications yet</div>';
+        return;
+    }
+    
+    list.innerHTML = notifications.map(notif => `
+        <div class="notification-item ${!notif.read ? 'unread' : ''}" onclick="markNotificationRead('${notif.id}')">
+            <div class="notification-title">${notif.fromUser || 'System'}</div>
+            <div class="notification-message">${notif.message}</div>
+            <div class="notification-time">${formatNotificationTime(notif.timestamp)}</div>
+        </div>
+    `).join('');
+}
+
+// Format notification time
+function formatNotificationTime(timestamp) {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diff = now - date;
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+    
+    if (minutes < 1) return 'Just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    if (hours < 24) return `${hours}h ago`;
+    if (days < 7) return `${days}d ago`;
+    return date.toLocaleDateString();
+}
+
+// Toggle notification panel
+function toggleNotifications() {
+    const panel = document.getElementById('notificationPanel');
+    panel.classList.toggle('show');
+    
+    if (panel.classList.contains('show')) {
+        loadNotifications();
+    }
+}
+
+// Mark notification as read
+async function markNotificationRead(notificationId) {
+    try {
+        await fetch(`${API_URL}/notifications/${notificationId}/mark-read`, {
+            method: 'POST'
+        });
+        
+        const notif = notifications.find(n => n.id === notificationId);
+        if (notif) {
+            notif.read = true;
+            updateNotificationUI();
+        }
+    } catch (error) {
+        console.error('Error marking notification as read:', error);
+    }
+}
+
+// Clear all notifications
+async function clearAllNotifications() {
+    if (!currentUser) return;
+    
+    if (!confirm('Clear all notifications?')) return;
+    
+    try {
+        await fetch(`${API_URL}/notifications/${currentUser.id}/clear`, {
+            method: 'DELETE'
+        });
+        
+        notifications = [];
+        updateNotificationUI();
+    } catch (error) {
+        console.error('Error clearing notifications:', error);
+    }
+}
+
+// Handle new notification from socket
+function handleNewNotification(notification) {
+    notifications.unshift(notification);
+    updateNotificationUI();
+    
+    // Play sound
+    const sound = document.getElementById('notificationSound');
+    if (sound) {
+        sound.play().catch(e => console.log('Sound play failed:', e));
+    }
+    
+    // Show browser notification
+    if (Notification.permission === 'granted') {
+        new Notification('Find My - Location Update', {
+            body: notification.message,
+            icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23007AFF"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>',
+            badge: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23FF3B30"><circle cx="12" cy="12" r="10"/></svg>'
+        });
+    }
+    
+    // Show in-app toast
+    showToast(notification.message);
+}
+
+// Show toast message
+function showToast(message) {
+    const toast = document.createElement('div');
+    toast.style.cssText = `
+        position: fixed;
+        top: 100px;
+        right: 20px;
+        background: #007AFF;
+        color: white;
+        padding: 16px 24px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        z-index: 10000;
+        max-width: 300px;
+        animation: slideIn 0.3s ease-out;
+    `;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.style.animation = 'slideOut 0.3s ease-in';
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+// Update socket connection to handle notifications
+const originalConnectSocket = connectSocket;
+connectSocket = function() {
+    originalConnectSocket();
+    
+    if (socket) {
+        socket.on('notification', (notification) => {
+            console.log('Received notification:', notification);
+            handleNewNotification(notification);
+        });
+    }
+};
+
+// Load notifications when user logs in
+const originalShowMainScreen = showMainScreen;
+showMainScreen = function() {
+    originalShowMainScreen();
+    loadNotifications();
+};
+
+// Add CSS animation
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes slideIn {
+        from {
+            transform: translateX(400px);
+            opacity: 0;
+        }
+        to {
+            transform: translateX(0);
+            opacity: 1;
+        }
+    }
+    
+    @keyframes slideOut {
+        from {
+            transform: translateX(0);
+            opacity: 1;
+        }
+        to {
+            transform: translateX(400px);
+            opacity: 0;
+        }
+    }
+`;
+document.head.appendChild(style);
+
     }, 10000);
 }
